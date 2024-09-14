@@ -1,0 +1,143 @@
+blueprint:
+  name: KNX dimming hue lights
+  description: Controll Home Assistant Light entities from KNX switching and relative dimming (DPT 3.007) telegrams.
+  domain: automation
+  input:
+    target_lights:
+      name: Light
+      description: The lights that shall be controled.
+      selector:
+        target:
+          entity:
+            domain: light
+    switch_address:
+      name: Switch group address
+      description: >
+        Group address for switching the lights on and off. DPT 1
+        Example: '2/0/0'
+    dimm_address:
+      name: Relative dimming address
+      description: >
+        Group address for dimming the lights. DPT 3.007
+        Example: '2/0/1'
+    initial_value:
+      name: Initial value
+      description: Initial value for light on, from 20% to 100%.
+      selector:
+        number:
+          min: 20
+          max: 100
+          step: 10
+          unit_of_measurement: '%'
+          mode: slider
+      default: 100
+    dimm_value:
+      name: Dimmed value
+      description: Dimmed value for light dim, from 5% to 90%.
+      selector:
+        number:
+          min: 5
+          max: 90
+          step: 5
+          unit_of_measurement: '%'
+          mode: slider
+      default: 50
+
+
+# no matched condition stops repeat sequence to stop dimming (dimm 0)
+mode: restart
+max_exceeded: silent
+
+variables:
+  _initial_value: !input initial_value
+  _dimm_value: !input dimm_value
+
+
+trigger:
+  - platform: homeassistant
+    event: start
+    id: "initialize"
+  - platform: event
+    event_type: automation_reloaded
+    id: "initialize"
+  # when KNX integration was reloaded
+  - platform: event
+    event_type: service_registered
+    event_data:
+      domain: knx
+      service: event_register
+    id: "initialize"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input switch_address
+      telegramtype: GroupValueWrite
+    id: "switch"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input dimm_address
+      telegramtype: GroupValueWrite
+    id: "dimm"
+
+action:
+  - choose:
+    # TURN ON by KNX
+    - conditions:
+        condition: and
+        conditions:
+          - condition: trigger
+            id: "switch"
+          - "{{ trigger.event.data.data == 1 }}"
+      sequence:
+        - service: light.turn_on
+          target: !input target_lights
+          data:
+            brightness_pct: '{{ _initial_value }}'
+    # TURN OFF by KNX
+    - conditions:
+        condition: and
+        conditions:
+          - condition: trigger
+            id: "switch"
+          - "{{ trigger.event.data.data == 0 }}"
+      sequence:
+        - service: light.turn_off
+          target: !input target_lights
+    # DIMM UP by KNX
+    - conditions:
+        condition: and
+        conditions:
+          - condition: trigger
+            id: "dimm"
+          - "{{ 9 <= trigger.event.data.data <= 15 }}"
+      sequence:
+        - service: light.turn_on
+          target: !input target_lights
+          data:
+            brightness_pct: '{{ _initial_value }}'
+    # DIMM DOWN by KNX
+    - conditions:
+        condition: and
+        conditions:
+          - condition: trigger
+            id: "dimm"
+          - "{{ 1 <= trigger.event.data.data <= 7 }}"
+      sequence:
+        - service: light.turn_on
+          target: !input target_lights
+          data:
+            brightness_pct: '{{ _dimm_value }}'
+
+
+    # INITIALIZE
+    - conditions:
+        condition: trigger
+        id: "initialize"
+      sequence:
+        - service: knx.event_register
+          data:
+            address: !input switch_address
+        - service: knx.event_register
+          data:
+            address: !input dimm_address
